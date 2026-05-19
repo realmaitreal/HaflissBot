@@ -1,0 +1,18 @@
+{
+  "name": "streetmod-discord-bot",
+  "version": "1.0.0",
+  "description": "Discord moderation bot for NSFW images, MrBeast-style scams, and low-quality scammy writing.",
+  "main": "src/index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "discord.js": "^14.26.4",
+    "dotenv": "^16.6.1"
+  }
+}
