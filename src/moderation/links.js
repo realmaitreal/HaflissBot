@@ -1,4 +1,6 @@
 const URL_PATTERN = /\bhttps?:\/\/[^\s<>"']+/gi;
+const BARE_DOMAIN_PATTERN =
+  /(^|[\s(<])((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:com|net|org|io|gg|xyz|site|top|click|link|info|biz|dev|app|local|fr|co|me|tv|ru|cn|tk|ml|ga|cf|gq)(?::\d{2,5})?(?:\/[^\s<>"']*)?)/gi;
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -11,24 +13,41 @@ function cleanUrlCandidate(candidate) {
     .replace(/[),.!?;:\]]+$/g, "");
 }
 
+function normalizeUrlCandidate(candidate) {
+  const cleaned = cleanUrlCandidate(candidate);
+  const withScheme = /^https?:\/\//i.test(cleaned) ? cleaned : `https://${cleaned}`;
+  return new URL(withScheme).toString();
+}
+
+function addUrl(urls, seen, candidate) {
+  let normalized;
+
+  try {
+    normalized = normalizeUrlCandidate(candidate);
+  } catch {
+    return false;
+  }
+
+  if (seen.has(normalized)) return false;
+  seen.add(normalized);
+  urls.push(normalized);
+  return true;
+}
+
 function extractUrls(text, maxUrls = 3) {
   const urls = [];
   const seen = new Set();
+  const rawText = String(text || "");
 
-  for (const match of String(text || "").matchAll(URL_PATTERN)) {
-    const candidate = cleanUrlCandidate(match[0]);
-    let normalized;
+  for (const match of rawText.matchAll(URL_PATTERN)) {
+    addUrl(urls, seen, match[0]);
+    if (urls.length >= maxUrls) break;
+  }
 
-    try {
-      normalized = new URL(candidate).toString();
-    } catch {
-      continue;
-    }
+  if (urls.length >= maxUrls) return urls;
 
-    if (seen.has(normalized)) continue;
-    seen.add(normalized);
-    urls.push(normalized);
-
+  for (const match of rawText.matchAll(BARE_DOMAIN_PATTERN)) {
+    addUrl(urls, seen, match[2]);
     if (urls.length >= maxUrls) break;
   }
 
@@ -295,6 +314,7 @@ module.exports = {
   analyzeUrl,
   cleanUrlCandidate,
   extractUrls,
+  normalizeUrlCandidate,
   scoreVirusTotalStats,
   statsFromVirusTotalPayload,
   virusTotalUrlId

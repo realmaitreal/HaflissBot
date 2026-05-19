@@ -290,6 +290,12 @@ test("extracts normalized links from message text", () => {
   assert.deepEqual(urls, ["https://example.com/test", "https://x.test/a"]);
 });
 
+test("extracts bare website domains from message text", () => {
+  const urls = extractUrls("go google.com and discord.gg/test now", 5);
+
+  assert.deepEqual(urls, ["https://google.com/", "https://discord.gg/test"]);
+});
+
 test("builds VirusTotal unpadded base64url URL ids", () => {
   assert.equal(virusTotalUrlId("https://example.com/"), "aHR0cHM6Ly9leGFtcGxlLmNvbS8");
 });
@@ -305,7 +311,7 @@ test("flags bad VirusTotal link scores", () => {
 });
 
 test("supports harmless bad-link deletion trigger when enabled", () => {
-  const result = analyzeLinkTestTriggers(["https://bad-link-test.local/path"], {
+  const result = analyzeLinkTestTriggers(extractUrls("bad-link-test.local/path", 3), {
     enableTestTriggers: true
   });
 
