@@ -1,4 +1,4 @@
-# StreetMod Discord Bot
+# HaflissBot
 
 A Discord moderation bot that can:
 
