@@ -5,12 +5,11 @@ A Discord moderation bot that can:
 - catch scammy or badly written messages,
 - catch bad speech such as harassment, threats, and direct insults,
 - flag MrBeast-style fake giveaway scams,
-- check image attachments for NSFW content with Hugging Face,
+- check image attachments for NSFW content with a local ONNX model,
 - answer with a local Ollama model when pinged,
 - answer in casual French slang when it warns users.
 
-The bot runs without paid AI keys for text checks. Image NSFW detection needs a Hugging Face token.
-AI replies use Ollama locally, so they do not need a cloud API key.
+The bot runs without paid AI keys for text checks or image NSFW checks. AI replies use Ollama locally too, so they do not need a cloud API key.
 
 ## Setup
 
@@ -41,17 +40,20 @@ npm install
 npm start
 ```
 
-## Hugging Face image checks
+## Local NSFW image checks
 
-Add this to `.env`:
+NSFW image detection uses Transformers.js with `onnx-community/nsfw_image_detection-ONNX`.
+The first scan downloads the public ONNX model into `.cache/transformers`; after that, inference runs locally on the server.
 
 ```bash
-HF_TOKEN=your_hugging-face-token
-HF_NSFW_MODEL=Falconsai/nsfw_image_detection
-HF_CAPTION_MODEL=Salesforce/blip-image-captioning-base
+ENABLE_LOCAL_NSFW=true
+LOCAL_NSFW_MODEL=onnx-community/nsfw_image_detection-ONNX
+LOCAL_NSFW_CACHE_DIR=.cache/transformers
+LOCAL_NSFW_ALLOW_REMOTE_MODELS=true
+NSFW_THRESHOLD=0.75
 ```
 
-`HF_NSFW_MODEL` scores image safety. `HF_CAPTION_MODEL` generates a short image caption, then the bot checks that caption for MrBeast/giveaway scam signals.
+Once the model has downloaded successfully, you can set `LOCAL_NSFW_ALLOW_REMOTE_MODELS=false` if you want the bot to use only the cached local files.
 
 ## Local AI replies
 
@@ -103,6 +105,10 @@ REPLY_TO_FLAGGED_MESSAGES=true
 ENABLE_TEST_TRIGGERS=false
 MOD_LOG_CHANNEL_ID=
 NSFW_THRESHOLD=0.75
+ENABLE_LOCAL_NSFW=true
+LOCAL_NSFW_MODEL=onnx-community/nsfw_image_detection-ONNX
+LOCAL_NSFW_CACHE_DIR=.cache/transformers
+LOCAL_NSFW_ALLOW_REMOTE_MODELS=true
 SCAM_THRESHOLD=55
 BAD_WRITING_THRESHOLD=45
 BAD_SPEECH_THRESHOLD=45

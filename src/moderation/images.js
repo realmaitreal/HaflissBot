@@ -1,3 +1,5 @@
+const path = require("node:path");
+
 const IMAGE_CONTENT_TYPES = new Set([
   "image/jpeg",
   "image/jpg",
@@ -14,7 +16,10 @@ function isImageAttachment(attachment) {
   return /\.(jpe?g|png|webp|gif)$/i.test(attachment.name || attachment.url || "");
 }
 
-function normalizeHfScores(payload) {
+let localNsfwClassifierPromise = null;
+let localNsfwClassifierKey = "";
+
+function normalizeClassifierScores(payload) {
   const rows = Array.isArray(payload?.[0]) ? payload[0] : payload;
   if (!Array.isArray(rows)) return [];
 
@@ -26,56 +31,20 @@ function normalizeHfScores(payload) {
     .filter((row) => row.label);
 }
 
-function findNsfwScore(hfScores) {
+function findNsfwScore(scores) {
   const nsfwLabels = ["nsfw", "sexy", "porn", "hentai", "explicit", "unsafe"];
   const safeLabels = ["normal", "safe", "sfw", "neutral"];
 
-  const nsfwScore = hfScores
+  const nsfwScore = scores
     .filter((row) => nsfwLabels.some((label) => row.label.includes(label)))
     .reduce((max, row) => Math.max(max, row.score), 0);
-  const safeScore = hfScores
+  const safeScore = scores
     .filter((row) => safeLabels.some((label) => row.label.includes(label)))
     .reduce((max, row) => Math.max(max, row.score), 0);
 
   if (nsfwScore > 0) return nsfwScore;
   if (safeScore > 0) return Math.max(0, 1 - safeScore);
   return 0;
-}
-
-function captionTextFromHf(payload) {
-  if (Array.isArray(payload)) {
-    const first = payload[0] || {};
-    return String(first.generated_text || first.caption || first.label || "");
-  }
-
-  return String(payload?.generated_text || payload?.caption || "");
-}
-
-async function queryHuggingFaceImage({ model, token, imageBuffer }) {
-  const response = await fetch(`https://api-inference.huggingface.co/models/${model}`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/octet-stream"
-    },
-    body: imageBuffer
-  });
-
-  if (!response.ok) {
-    const body = await response.text().catch(() => "");
-    throw new Error(`Hugging Face ${model} failed: ${response.status} ${body}`);
-  }
-
-  return response.json();
-}
-
-async function downloadAttachment(url) {
-  const response = await fetch(url);
-  if (!response.ok) {
-    throw new Error(`Could not download attachment: ${response.status}`);
-  }
-
-  return Buffer.from(await response.arrayBuffer());
 }
 
 function analyzeImageMetadata(attachment) {
@@ -133,124 +102,90 @@ function analyzeImageTestTrigger(attachment, config) {
   };
 }
 
-function analyzeCaptionForScam(caption) {
-  const text = caption.trim();
-  if (!text) {
+function scoreLocalNsfwPredictions(predictions, config) {
+  const scores = normalizeClassifierScores(predictions);
+  const nsfwScore = findNsfwScore(scores);
+  const percent = Math.round(nsfwScore * 100);
+
+  if (nsfwScore < config.nsfwThreshold) {
     return {
       flagged: false,
       flags: [],
-      score: 0,
+      score: percent,
       reasons: [],
-      summary: "caption vide"
-    };
-  }
-
-  const hasMrBeast = /\bmr\.?\s*beast\b|jimmy donaldson/i.test(text);
-  const hasScamSignal = /\b(giveaway|money|cash|dollars|winner|prize|click|claim|free)\b/i.test(text);
-
-  if (!hasMrBeast && !hasScamSignal) {
-    return {
-      flagged: false,
-      flags: [],
-      score: 0,
-      reasons: [],
-      summary: text
+      summary: `NSFW local ${percent}%`
     };
   }
 
   return {
-    flagged: hasMrBeast && hasScamSignal,
-    flags: hasMrBeast && hasScamSignal ? ["mrbeast_scam_image"] : [],
-    score: hasMrBeast && hasScamSignal ? 70 : 30,
-    reasons: hasMrBeast && hasScamSignal ? ["image type MrBeast giveaway fake"] : ["caption image suspecte"],
-    summary: text
+    flagged: true,
+    flags: ["nsfw_image"],
+    score: percent,
+    reasons: [`image NSFW locale (${percent}%)`],
+    summary: `NSFW local ${percent}%`
   };
+}
+
+async function getLocalNsfwClassifier(config) {
+  if (!config.enableLocalNsfw) return null;
+
+  const cacheDir = path.resolve(process.cwd(), config.localNsfwCacheDir || ".cache/transformers");
+  const model = config.localNsfwModel || "onnx-community/nsfw_image_detection-ONNX";
+  const allowRemote = config.localNsfwAllowRemoteModels !== false;
+  const classifierKey = `${model}|${cacheDir}|${allowRemote}`;
+
+  if (localNsfwClassifierPromise && localNsfwClassifierKey === classifierKey) {
+    return localNsfwClassifierPromise;
+  }
+
+  localNsfwClassifierKey = classifierKey;
+  localNsfwClassifierPromise = import("@huggingface/transformers")
+    .then(({ env, pipeline }) => {
+      env.cacheDir = cacheDir;
+      env.allowRemoteModels = allowRemote;
+      return pipeline("image-classification", model);
+    })
+    .catch((error) => {
+      localNsfwClassifierPromise = null;
+      localNsfwClassifierKey = "";
+      throw error;
+    });
+
+  return localNsfwClassifierPromise;
+}
+
+async function analyzeLocalNsfwAttachment(attachment, config) {
+  const classifier = await getLocalNsfwClassifier(config);
+  if (!classifier) {
+    return {
+      flagged: false,
+      flags: [],
+      score: 0,
+      reasons: [],
+      summary: "scan NSFW local désactivé"
+    };
+  }
+
+  const predictions = await classifier(attachment.url, { topk: 0 });
+  return scoreLocalNsfwPredictions(predictions, config);
 }
 
 async function analyzeImageAttachment(attachment, config) {
   const metadata = analyzeImageMetadata(attachment);
   const testTrigger = analyzeImageTestTrigger(attachment, config);
+  const results = [metadata, testTrigger];
 
-  if (!config.hfToken) {
-    return mergeImageResults([metadata, testTrigger]);
-  }
-
-  const flags = [];
-  const reasons = [];
-  let nsfwScore = 0;
-
-  for (const result of [metadata, testTrigger]) {
-    if (!result.flagged) continue;
-    flags.push(...result.flags);
-    reasons.push(...result.reasons);
-  }
-
-  let imageBuffer;
-  try {
-    imageBuffer = await downloadAttachment(attachment.url);
-  } catch (error) {
-    return {
-      flagged: flags.length > 0,
-      flags: [...new Set(flags)],
-      score: Math.max(metadata.score, testTrigger.score),
-      reasons: [...new Set(reasons)],
-      summary: `image impossible à télécharger: ${error.message}`
-    };
+  if (testTrigger.flagged) {
+    return mergeImageResults(results);
   }
 
   try {
-    const nsfwPayload = await queryHuggingFaceImage({
-      model: config.hfNsfwModel,
-      token: config.hfToken,
-      imageBuffer
-    });
-    const nsfwScores = normalizeHfScores(nsfwPayload);
-    nsfwScore = findNsfwScore(nsfwScores);
+    results.push(await analyzeLocalNsfwAttachment(attachment, config));
   } catch (error) {
-    reasons.push(`analyse NSFW indisponible: ${error.message}`);
+    console.warn(`Local NSFW scan unavailable for ${attachment.name || attachment.url}: ${error.message}`);
   }
 
-  if (nsfwScore >= config.nsfwThreshold) {
-    flags.push("nsfw_image");
-    reasons.push(`image NSFW (${Math.round(nsfwScore * 100)}%)`);
-  }
-
-  let captionResult = {
-    flagged: false,
-    flags: [],
-    score: 0,
-    reasons: [],
-    summary: ""
-  };
-
-  if (config.hfCaptionModel) {
-    try {
-      const captionPayload = await queryHuggingFaceImage({
-        model: config.hfCaptionModel,
-        token: config.hfToken,
-        imageBuffer
-      });
-      captionResult = analyzeCaptionForScam(captionTextFromHf(captionPayload));
-    } catch (error) {
-      reasons.push(`caption image indisponible: ${error.message}`);
-    }
-  }
-
-  if (captionResult.flagged) {
-    flags.push(...captionResult.flags);
-    reasons.push(...captionResult.reasons);
-  }
-
-  const uniqueFlags = [...new Set(flags)];
-  const uniqueReasons = [...new Set(reasons)];
-
-  return {
-    flagged: uniqueFlags.length > 0,
-    flags: uniqueFlags,
-    score: Math.max(Math.round(nsfwScore * 100), metadata.score, testTrigger.score, captionResult.score),
-    reasons: uniqueReasons,
-    summary: captionResult.summary || metadata.summary
-  };
+  return mergeImageResults(results);
 }
 
 function mergeImageResults(results) {
@@ -270,12 +205,13 @@ function mergeImageResults(results) {
 }
 
 module.exports = {
-  analyzeCaptionForScam,
   analyzeImageAttachment,
   analyzeImageMetadata,
   analyzeImageTestTrigger,
-  captionTextFromHf,
+  analyzeLocalNsfwAttachment,
   findNsfwScore,
+  getLocalNsfwClassifier,
   isImageAttachment,
-  normalizeHfScores
+  normalizeClassifierScores,
+  scoreLocalNsfwPredictions
 };

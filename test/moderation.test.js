@@ -19,11 +19,11 @@ const {
 } = require("../src/moderation/links");
 const { shouldDeleteFlaggedMessage } = require("../src/moderation/actions");
 const {
-  analyzeCaptionForScam,
   analyzeImageMetadata,
   analyzeImageTestTrigger,
   findNsfwScore,
-  normalizeHfScores
+  normalizeClassifierScores,
+  scoreLocalNsfwPredictions
 } = require("../src/moderation/images");
 const { mergeResults } = require("../src/moderation/result");
 const { analyzeText, scoreBadSpeech, scoreBadWriting, scoreScamText } = require("../src/moderation/text");
@@ -142,15 +142,15 @@ test("scores scam text combos higher", () => {
   assert.ok(result.reasons.includes("combo MrBeast + argent/cadeau"));
 });
 
-test("normalizes Hugging Face classifier responses", () => {
-  const scores = normalizeHfScores([[{ label: "nsfw", score: 0.91 }]]);
+test("normalizes image classifier responses", () => {
+  const scores = normalizeClassifierScores([[{ label: "nsfw", score: 0.91 }]]);
 
   assert.deepEqual(scores, [{ label: "nsfw", score: 0.91 }]);
   assert.equal(findNsfwScore(scores), 0.91);
 });
 
 test("does not treat unknown image labels as NSFW", () => {
-  const scores = normalizeHfScores([{ label: "drawing", score: 0.95 }]);
+  const scores = normalizeClassifierScores([{ label: "drawing", score: 0.95 }]);
 
   assert.equal(findNsfwScore(scores), 0);
 });
@@ -193,11 +193,18 @@ test("keeps harmless NSFW image test trigger disabled by default", () => {
   assert.equal(result.flagged, false);
 });
 
-test("detects suspicious generated image caption", () => {
-  const result = analyzeCaptionForScam("a MrBeast giveaway poster offering free money");
+test("scores local NSFW classifier predictions", () => {
+  const result = scoreLocalNsfwPredictions(
+    [
+      { label: "normal", score: 0.1 },
+      { label: "nsfw", score: 0.9 }
+    ],
+    { nsfwThreshold: 0.75 }
+  );
 
   assert.equal(result.flagged, true);
-  assert.ok(result.flags.includes("mrbeast_scam_image"));
+  assert.ok(result.flags.includes("nsfw_image"));
+  assert.equal(result.score, 90);
 });
 
 test("merges moderation results", () => {

@@ -25,14 +25,15 @@ function listFromEnv(name) {
 const config = {
   discordToken: process.env.DISCORD_TOKEN || "",
   modLogChannelId: process.env.MOD_LOG_CHANNEL_ID || "",
-  hfToken: process.env.HF_TOKEN || "",
-  hfNsfwModel: process.env.HF_NSFW_MODEL || "Falconsai/nsfw_image_detection",
-  hfCaptionModel:
-    process.env.HF_CAPTION_MODEL || "Salesforce/blip-image-captioning-base",
   deleteFlaggedMessages: booleanFromEnv("DELETE_FLAGGED_MESSAGES", false),
   replyToFlaggedMessages: booleanFromEnv("REPLY_TO_FLAGGED_MESSAGES", true),
   enableTestTriggers: booleanFromEnv("ENABLE_TEST_TRIGGERS", false),
   nsfwThreshold: numberFromEnv("NSFW_THRESHOLD", 0.75),
+  enableLocalNsfw: booleanFromEnv("ENABLE_LOCAL_NSFW", true),
+  localNsfwModel:
+    process.env.LOCAL_NSFW_MODEL || "onnx-community/nsfw_image_detection-ONNX",
+  localNsfwCacheDir: process.env.LOCAL_NSFW_CACHE_DIR || ".cache/transformers",
+  localNsfwAllowRemoteModels: booleanFromEnv("LOCAL_NSFW_ALLOW_REMOTE_MODELS", true),
   scamThreshold: numberFromEnv("SCAM_THRESHOLD", 55),
   badWritingThreshold: numberFromEnv("BAD_WRITING_THRESHOLD", 45),
   badSpeechThreshold: numberFromEnv("BAD_SPEECH_THRESHOLD", 45),
