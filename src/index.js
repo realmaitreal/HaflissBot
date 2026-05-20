@@ -108,6 +108,43 @@ function isMentioningBot(message) {
   return Boolean(client.user?.id && message.mentions.users.has(client.user.id));
 }
 
+function isAdmin(member) {
+  return member?.permissions.has(PermissionsBitField.Flags.ModerateMembers);
+}
+
+async function handleMuteCommand(message) {
+  if (!isMentioningBot(message)) return false;
+
+  const muteMatch = message.content.match(/\bMUTE\b/i);
+  if (!muteMatch) return false;
+
+  if (!isAdmin(message.member)) return false;
+
+  const targetUser = message.mentions.users.filter((u) => u.id !== client.user.id).first();
+  if (!targetUser) return false;
+
+  const targetMember = await message.guild.members.fetch(targetUser.id).catch(() => null);
+  if (!targetMember) return false;
+
+  const botMember = await message.guild.members.fetchMe().catch(() => null);
+  const canTimeout = botMember?.permissions.has(PermissionsBitField.Flags.ModerateMembers);
+
+  if (!canTimeout) {
+    console.warn(`Cannot timeout ${targetUser.tag}: missing Moderate Members permission`);
+    return false;
+  }
+
+  const thirtyMinutes = 30 * 60 * 1000;
+  await targetMember.timeout(thirtyMinutes, `Mute ordonné par ${message.author.tag}`);
+
+  await message.channel.send(
+    `T'ES PUNIE <@${targetUser.id}> SOUS ORDRE DE <@${message.author.id}>`
+  );
+
+  console.log(`${targetUser.tag} muted 30min by admin ${message.author.tag}`);
+  return true;
+}
+
 async function handleMentionReply(message) {
   if (!config.enableAiReplies || !isMentioningBot(message)) return false;
 
@@ -155,6 +192,12 @@ client.on(Events.MessageCreate, async (message) => {
     });
     return;
   }
+
+  const muted = await handleMuteCommand(message).catch((error) => {
+    console.error(`Failed to handle mute command ${message.id}:`, error);
+    return false;
+  });
+  if (muted) return;
 
   await handleMentionReply(message).catch((error) => {
     console.error(`Failed to answer mention ${message.id}:`, error);
