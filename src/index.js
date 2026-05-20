@@ -8,11 +8,10 @@ const {
 const { generateMentionReply } = require("./chat/localModel");
 const { config } = require("./config");
 const { shouldDeleteFlaggedMessage } = require("./moderation/actions");
-const { formatFrenchWarning } = require("./moderation/french");
+const { analyzeTextWithAI } = require("./moderation/aiScore");
 const { analyzeImageAttachment, isImageAttachment } = require("./moderation/images");
 const { analyzeLinks } = require("./moderation/links");
 const { mergeResults } = require("./moderation/result");
-const { analyzeText } = require("./moderation/text");
 
 if (!config.discordToken) {
   console.error("Missing DISCORD_TOKEN. Copy .env.example to .env and add your bot token.");
@@ -33,7 +32,7 @@ client.once(Events.ClientReady, (readyClient) => {
 });
 
 function moderationReplyText(result) {
-  return result.flags.includes("bad_speech") ? "T'ES PUNI" : formatFrenchWarning(result);
+  return result.flags.includes("bad_speech") ? "T'ES PUNI" : `Calme le post: ${result.summary}`;
 }
 
 async function sendModLog(message, result) {
@@ -58,11 +57,32 @@ async function sendModLog(message, result) {
 async function handleFlaggedMessage(message, result) {
   await sendModLog(message, result);
 
+  const isOwner = message.guild?.ownerId === message.author.id;
+
+  if (isOwner) {
+    await message.channel.send("Respectez le roi klt.");
+    return;
+  }
+
+  const isBadSpeech = result.flags.includes("bad_speech");
+
   if (config.replyToFlaggedMessages) {
     await message.reply({
       content: moderationReplyText(result),
       allowedMentions: { repliedUser: false }
     });
+  }
+
+  if (isBadSpeech && message.guild) {
+    const botMember = await message.guild.members.fetchMe().catch(() => null);
+    const canTimeout = botMember?.permissions.has(PermissionsBitField.Flags.ModerateMembers);
+
+    if (canTimeout) {
+      const member = await message.guild.members.fetch(message.author.id).catch(() => null);
+      await member?.timeout(30 * 60 * 1000, "bad speech détecté par l'IA").catch((error) => {
+        console.warn(`Could not timeout ${message.author.tag}:`, error.message);
+      });
+    }
   }
 
   const shouldDelete = shouldDeleteFlaggedMessage(result, config);
@@ -172,13 +192,16 @@ async function handleMentionReply(message) {
 client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot || !message.inGuild()) return;
 
-  const textResult = analyzeText(message.content || "", {
+  const thresholds = {
     scamThreshold: config.scamThreshold,
     badWritingThreshold: config.badWritingThreshold,
     badSpeechThreshold: config.badSpeechThreshold,
     customBadSpeechTerms: config.customBadSpeechTerms,
     enableTestTriggers: config.enableTestTriggers
-  });
+  };
+
+  const textResult = await analyzeTextWithAI(message.content || "", config, thresholds);
+  if (!textResult) return;
   const imageResults = await analyzeAttachments(message);
   const linkResult = await analyzeLinks(message.content || "", config);
   const result = mergeResults([textResult, linkResult, ...imageResults]);
